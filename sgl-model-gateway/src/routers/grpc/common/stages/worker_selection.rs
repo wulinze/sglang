@@ -162,9 +162,7 @@ impl WorkerSelectionStage {
         };
 
         // Get cached hash ring for consistent hashing (O(log n) lookup)
-        let hash_ring = self
-            .worker_registry
-            .get_hash_ring(model_id.unwrap_or(UNKNOWN_MODEL_ID));
+        let hash_ring = self.worker_registry.get_hash_ring(model_id);
 
         // Select worker using the policy
         let idx = policy
@@ -237,9 +235,7 @@ impl WorkerSelectionStage {
         };
 
         // Get cached hash ring for consistent hashing (O(log n) lookup)
-        let hash_ring = self
-            .worker_registry
-            .get_hash_ring(model_id.unwrap_or(UNKNOWN_MODEL_ID));
+        let hash_ring = self.worker_registry.get_hash_ring(model_id);
 
         let info = SelectWorkerInfo {
             request_text: text,

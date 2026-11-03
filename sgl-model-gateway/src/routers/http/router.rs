@@ -164,9 +164,7 @@ impl Router {
         };
 
         // Get cached hash ring for consistent hashing (O(log n) lookup)
-        let hash_ring = self
-            .worker_registry
-            .get_hash_ring(effective_model_id.unwrap_or(UNKNOWN_MODEL_ID));
+        let hash_ring = self.worker_registry.get_hash_ring(effective_model_id);
 
         let idx = policy
             .select_worker(

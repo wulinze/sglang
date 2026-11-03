@@ -7,12 +7,13 @@
 //! This is critical for high-concurrency scenarios where many requests query the same model.
 //!
 //! # Consistent Hash Ring
-//! The registry maintains a pre-computed hash ring per model for O(log n) consistent hashing.
+//! The registry maintains pre-computed global and per-model hash rings for consistent hashing.
 //! The ring is rebuilt only when workers are added/removed, not per-request.
-//! Uses virtual nodes (150 per worker) for even distribution and blake3 for stable hashing.
+//! Uses virtual nodes (600 per worker) for even distribution and blake3 for stable hashing.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use smg_mesh::OptionalMeshSyncManager;
 use uuid::Uuid;
@@ -27,8 +28,8 @@ use crate::{
 };
 
 /// Number of virtual nodes per physical worker for even distribution.
-/// 150 is a common choice that provides good balance between memory and distribution.
-const VIRTUAL_NODES_PER_WORKER: usize = 150;
+/// More virtual nodes reduce key-space skew across small worker pools.
+const VIRTUAL_NODES_PER_WORKER: usize = 600;
 
 /// Consistent hash ring for O(log n) worker selection.
 ///
@@ -43,7 +44,7 @@ const VIRTUAL_NODES_PER_WORKER: usize = 150;
 pub struct HashRing {
     /// Sorted list of (ring_position, worker_url)
     /// Multiple entries per worker (virtual nodes) for even distribution.
-    /// Uses Arc<str> to share URL across all virtual nodes (150 refs vs 150 copies).
+    /// Uses Arc<str> to share URL across all virtual nodes instead of copying it.
     entries: Arc<[(u64, Arc<str>)]>,
 }
 
@@ -189,6 +190,12 @@ pub struct WorkerRegistry {
     /// Rebuilt on worker add/remove (copy-on-write).
     hash_rings: Arc<DashMap<String, Arc<HashRing>>>,
 
+    /// All workers, used when routing without a model filter.
+    global_hash_ring: ArcSwap<HashRing>,
+
+    /// Serialize membership updates so cached rings cannot publish stale snapshots.
+    membership_update: Mutex<()>,
+
     /// Workers indexed by worker type
     type_workers: Arc<DashMap<WorkerType, Vec<WorkerId>>>,
 
@@ -210,6 +217,8 @@ impl WorkerRegistry {
             workers: Arc::new(DashMap::new()),
             model_index: Arc::new(DashMap::new()),
             hash_rings: Arc::new(DashMap::new()),
+            global_hash_ring: ArcSwap::from_pointee(HashRing::new(&[])),
+            membership_update: Mutex::new(()),
             type_workers: Arc::new(DashMap::new()),
             connection_workers: Arc::new(DashMap::new()),
             url_to_id: Arc::new(DashMap::new()),
@@ -228,9 +237,35 @@ impl WorkerRegistry {
         }
     }
 
-    /// Get the hash ring for a model (O(1) lookup)
-    pub fn get_hash_ring(&self, model_id: &str) -> Option<Arc<HashRing>> {
-        self.hash_rings.get(model_id).map(|r| Arc::clone(&r))
+    /// Get the cached ring for the same model filter used to select workers.
+    /// No model filter selects the global ring, not the unknown-model worker pool.
+    pub fn get_hash_ring(&self, model_id: Option<&str>) -> Option<Arc<HashRing>> {
+        match model_id {
+            Some(model) => self.hash_rings.get(model).map(|r| Arc::clone(&r)),
+            None => Some(self.global_hash_ring.load_full()),
+        }
+    }
+
+    fn rebuild_global_hash_ring(&self) {
+        self.global_hash_ring
+            .store(Arc::new(HashRing::new(&self.get_all())));
+    }
+
+    fn remove_from_indexes(&self, worker_id: &WorkerId, worker: &dyn Worker) {
+        if let Some(mut entry) = self.model_index.get_mut(worker.model_id()) {
+            let remaining: Vec<_> = entry
+                .iter()
+                .filter(|w| w.url() != worker.url())
+                .cloned()
+                .collect();
+            *entry = Arc::from(remaining.into_boxed_slice());
+        }
+        if let Some(mut workers) = self.type_workers.get_mut(worker.worker_type()) {
+            workers.retain(|id| id != worker_id);
+        }
+        if let Some(mut workers) = self.connection_workers.get_mut(worker.connection_mode()) {
+            workers.retain(|id| id != worker_id);
+        }
     }
 
     /// Set mesh sync manager (thread-safe, can be called after initialization)
@@ -240,15 +275,17 @@ impl WorkerRegistry {
 
     /// Register a new worker
     pub fn register(&self, worker: Arc<dyn Worker>) -> WorkerId {
-        let worker_id = if let Some(existing_id) = self.url_to_id.get(worker.url()) {
-            // Worker with this URL already exists, update it
-            existing_id.clone()
-        } else {
-            WorkerId::new()
-        };
+        let _update = self.membership_update.lock().unwrap();
+        let worker_id = self.reserve_id_for_url(worker.url());
 
-        // Store worker
-        self.workers.insert(worker_id.clone(), worker.clone());
+        // Replacement must remove the previous model/type membership, including
+        // when worker discovery updates the model associated with an existing URL.
+        if let Some(previous) = self.workers.insert(worker_id.clone(), worker.clone()) {
+            self.remove_from_indexes(&worker_id, previous.as_ref());
+            if previous.model_id() != worker.model_id() {
+                self.rebuild_hash_ring(previous.model_id());
+            }
+        }
 
         // Update URL mapping
         self.url_to_id
@@ -282,6 +319,8 @@ impl WorkerRegistry {
             .or_default()
             .push(worker_id.clone());
 
+        self.rebuild_global_hash_ring();
+
         // Sync to mesh if enabled (no-op if mesh is not enabled)
         if let Some(ref mesh_sync) = *self.mesh_sync.read().unwrap() {
             mesh_sync.sync_worker_state(
@@ -314,37 +353,18 @@ impl WorkerRegistry {
 
     /// Remove a worker by ID
     pub fn remove(&self, worker_id: &WorkerId) -> Option<Arc<dyn Worker>> {
+        let _update = self.membership_update.lock().unwrap();
+        self.remove_worker(worker_id)
+    }
+
+    fn remove_worker(&self, worker_id: &WorkerId) -> Option<Arc<dyn Worker>> {
         if let Some((_, worker)) = self.workers.remove(worker_id) {
             // Remove from URL mapping
             self.url_to_id.remove(worker.url());
 
-            // Remove from model index using copy-on-write
-            // Create new snapshot without the removed worker
-            let worker_url = worker.url();
-            let model_id = worker.model_id().to_string();
-            if let Some(mut entry) = self.model_index.get_mut(&model_id) {
-                let new_workers: Vec<Arc<dyn Worker>> = entry
-                    .iter()
-                    .filter(|w| w.url() != worker_url)
-                    .cloned()
-                    .collect();
-                *entry = Arc::from(new_workers.into_boxed_slice());
-            }
-
-            // Rebuild hash ring for this model
-            self.rebuild_hash_ring(&model_id);
-
-            // Remove from type index
-            if let Some(mut type_workers) = self.type_workers.get_mut(worker.worker_type()) {
-                type_workers.retain(|id| id != worker_id);
-            }
-
-            // Remove from connection mode index
-            if let Some(mut conn_workers) =
-                self.connection_workers.get_mut(worker.connection_mode())
-            {
-                conn_workers.retain(|id| id != worker_id);
-            }
+            self.remove_from_indexes(worker_id, worker.as_ref());
+            self.rebuild_hash_ring(worker.model_id());
+            self.rebuild_global_hash_ring();
 
             worker.set_healthy(false);
             Metrics::remove_worker_metrics(worker.url());
@@ -362,8 +382,9 @@ impl WorkerRegistry {
 
     /// Remove a worker by URL
     pub fn remove_by_url(&self, url: &str) -> Option<Arc<dyn Worker>> {
+        let _update = self.membership_update.lock().unwrap();
         if let Some((_, worker_id)) = self.url_to_id.remove(url) {
-            self.remove(&worker_id)
+            self.remove_worker(&worker_id)
         } else {
             None
         }
@@ -831,5 +852,78 @@ mod tests {
         let llama_workers_after = registry.get_by_model("llama-3");
         assert_eq!(llama_workers_after.len(), 1);
         assert_eq!(llama_workers_after[0].url(), "http://worker2:8080");
+    }
+
+    #[test]
+    fn test_global_hash_ring_membership_and_model_updates() {
+        let registry = WorkerRegistry::new();
+        let worker = |url, model: &str, worker_type| -> Arc<dyn Worker> {
+            Arc::new(
+                BasicWorkerBuilder::new(url)
+                    .worker_type(worker_type)
+                    .labels(HashMap::from([("model_id".to_string(), model.to_string())]))
+                    .build(),
+            )
+        };
+
+        assert!(registry.get_hash_ring(None).unwrap().is_empty());
+        let first_id = registry.register(worker("http://worker1", "model-a", WorkerType::Regular));
+        let first_ring = registry.get_hash_ring(None).unwrap();
+        assert_eq!(first_ring.worker_count(), 1);
+        assert!(Arc::ptr_eq(
+            &first_ring,
+            &registry.get_hash_ring(None).unwrap()
+        ));
+        assert!(registry.get_hash_ring(Some("missing-model")).is_none());
+
+        registry.register(worker("http://worker2", "model-b", WorkerType::Regular));
+        assert_eq!(registry.get_hash_ring(None).unwrap().worker_count(), 2);
+        assert_eq!(
+            registry
+                .get_hash_ring(Some("model-a"))
+                .unwrap()
+                .worker_count(),
+            1
+        );
+        assert_eq!(
+            registry
+                .get_hash_ring(Some("model-b"))
+                .unwrap()
+                .worker_count(),
+            1
+        );
+        assert_eq!(first_ring.worker_count(), 1);
+
+        // Re-discovery can replace model/type metadata for an existing URL.
+        let replacement = worker("http://worker1", "model-b", WorkerType::Decode);
+        assert_eq!(registry.register(replacement.clone()), first_id);
+        assert_eq!(registry.register(replacement), first_id);
+        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.get_hash_ring(None).unwrap().worker_count(), 2);
+        assert!(registry.get_hash_ring(Some("model-a")).unwrap().is_empty());
+        assert_eq!(
+            registry
+                .get_hash_ring(Some("model-b"))
+                .unwrap()
+                .worker_count(),
+            2
+        );
+        assert_eq!(registry.get_by_model("model-b").len(), 2);
+        assert_eq!(registry.get_by_type(&WorkerType::Regular).len(), 1);
+        assert_eq!(registry.get_decode_workers().len(), 1);
+        assert_eq!(registry.get_by_connection(&ConnectionMode::Http).len(), 2);
+
+        registry.remove_by_url("http://worker2").unwrap();
+        assert_eq!(registry.get_hash_ring(None).unwrap().worker_count(), 1);
+        assert_eq!(
+            registry
+                .get_hash_ring(Some("model-b"))
+                .unwrap()
+                .worker_count(),
+            1
+        );
+        registry.remove(&first_id).unwrap();
+        assert!(registry.get_hash_ring(None).unwrap().is_empty());
+        assert!(registry.get_hash_ring(Some("model-b")).unwrap().is_empty());
     }
 }

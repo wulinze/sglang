@@ -1131,9 +1131,7 @@ impl PDRouter {
         };
 
         // Get cached hash ring for consistent hashing
-        let hash_ring = self
-            .worker_registry
-            .get_hash_ring(effective_model_id.unwrap_or(UNKNOWN_MODEL_ID));
+        let hash_ring = self.worker_registry.get_hash_ring(effective_model_id);
 
         let worker = Self::pick_worker_by_policy_arc(
             &workers,
@@ -1984,6 +1982,90 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("No prefill workers available"));
+    }
+
+    #[tokio::test]
+    async fn test_consistent_hashing_named_workers_without_igw() {
+        let mut router = create_test_pd_router();
+        router.policy_registry = Arc::new(PolicyRegistry::new(
+            crate::config::PolicyConfig::ConsistentHashing,
+        ));
+        let mut prefill_workers = Vec::new();
+        for index in 0..6 {
+            let worker: Arc<dyn Worker> = Arc::new(
+                BasicWorkerBuilder::new(format!("http://prefill{index}"))
+                    .worker_type(WorkerType::Prefill {
+                        bootstrap_port: None,
+                    })
+                    .labels(std::collections::HashMap::from([(
+                        "model_id".to_string(),
+                        "named-model".to_string(),
+                    )]))
+                    .build(),
+            );
+            worker.set_healthy(true);
+            router.worker_registry.register(worker.clone());
+            prefill_workers.push(worker);
+        }
+        let decode: Arc<dyn Worker> = Arc::new(
+            BasicWorkerBuilder::new("http://decode")
+                .worker_type(WorkerType::Decode)
+                .labels(std::collections::HashMap::from([(
+                    "model_id".to_string(),
+                    "named-model".to_string(),
+                )]))
+                .build(),
+        );
+        decode.set_healthy(true);
+        router.worker_registry.register(decode);
+
+        // The absent model filter must use the URL ring, not modulo the
+        // registry's iteration order or a ring for UNKNOWN_MODEL_ID.
+        assert!(router
+            .worker_registry
+            .get_hash_ring(Some(UNKNOWN_MODEL_ID))
+            .is_none());
+        let expected_ring = HashRing::new(&prefill_workers);
+        let mut original_urls = Vec::new();
+        for index in 0..128 {
+            let key = format!("session-{index}");
+            let mut headers = HeaderMap::new();
+            headers.insert("x-smg-routing-key", key.parse().unwrap());
+            let (prefill, decode) = router
+                .select_pd_pair(None, Some("named-model"), Some(&headers))
+                .await
+                .unwrap();
+            assert_eq!(
+                prefill.url(),
+                expected_ring.find_healthy_url(&key, |_| true).unwrap()
+            );
+            assert_eq!(decode.url(), "http://decode");
+            original_urls.push(prefill.url().to_string());
+        }
+
+        // Removing a worker only remaps that worker's sessions.
+        router
+            .worker_registry
+            .remove_by_url("http://prefill0")
+            .unwrap();
+        for (index, original_url) in original_urls.iter().enumerate() {
+            let key = format!("session-{index}");
+            let mut headers = HeaderMap::new();
+            headers.insert("x-smg-routing-key", key.parse().unwrap());
+            let (prefill, _) = router
+                .select_pd_pair(None, None, Some(&headers))
+                .await
+                .unwrap();
+            assert_eq!(
+                prefill.url(),
+                expected_ring
+                    .find_healthy_url(&key, |url| url != "http://prefill0")
+                    .unwrap()
+            );
+            if original_url != "http://prefill0" {
+                assert_eq!(prefill.url(), original_url);
+            }
+        }
     }
 
     #[test]
