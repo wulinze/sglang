@@ -1,6 +1,6 @@
 ## Motivation
 
-Add context-parallel prefill for **Qwen3.5 and Qwen3.8**, preserving causal GDN state, attention token order, prefix reuse and PD transfer. Qwen3.5 uses `qwen3_5.py`; Qwen3.8 uses the existing `qwen4_exp.py` and QSA/indexer path.
+Add context-parallel prefill for **Qwen3.5 and Qwen3.8** (the existing `qwen4_exp.py` path), preserving causal state, token order, prefix reuse and PD transfer.
 
 Design: [original article](https://wulinze.github.io/llm/qwen35-context-parallel/) and [implementation notes](https://github.com/wulinze/sglang/blob/49349fe5b91909dfadfbd64c64e64b93004104b8/pr-body.md).
 
@@ -10,9 +10,9 @@ Design: [original article](https://wulinze.github.io/llm/qwen35-context-parallel
 
 ### CP partitioning
 
-- **GDN, both models:** contiguous segments aligned to 64 tokens; convolution-halo exchange, ordered affine-state prefix composition, FlashQLA prefill and owned convolution/temporal checkpoints.
-- **Qwen3.5 full attention:** local round-robin Q (zigzag also supported), persistent KV ownership by absolute position, a double-buffered KV ring and causal FA3/TRT-LLM attention with LSE-weighted output merging.
-- **Qwen3.8 QSA:** queries interleaved over packed token rows, index-key ring and sparse top-k selection. Gather fresh sparse-attention KV once and pack cached prefixes while preserving fresh BF16 values and causal positions. Its cache contract differs from the full-attention KV ring.
+- **GDN:** 64-token-aligned contiguous segments, convolution halos, ordered affine-state prefix composition, FlashQLA prefill and convolution/temporal checkpoints.
+- **Qwen3.5:** local round-robin Q (or zigzag), KV ownership by absolute position, a double-buffered KV ring and causal FA3/TRT-LLM attention merged with LSE weights.
+- **Qwen3.8 QSA:** interleaved packed query rows, index-key ring and sparse top-k selection. Gather new KV once and pack prefixes, preserving fresh BF16 values and causal positions under the existing QSA cache contract.
 
 For `N` new tokens and `C` ranks:
 
@@ -22,7 +22,7 @@ Sharded full-attention KV owner = (prefix_length + new_token_index) % C
 QSA interleaved query owner = packed_new_token_row % C
 ```
 
-Padding stays out of expert dispatch and KV storage. Layer boundaries apply matching hidden/residual/mHC row plans, preserve Qwen3.8 PLE global-order requirements and restore logical output order.
+Padding stays out of dispatch/KV storage. Hidden/residual/mHC row plans agree, PLE retains global-order inputs, and model outputs return to logical order.
 
 ![Execution flow](https://raw.githubusercontent.com/wulinze/sglang/b0b4589c1c5708d72acea79f187edd784b1c7582/hybrid-cp-flow.png)
 
@@ -48,7 +48,7 @@ ModelRunner reserves bounded workspaces before KV budgeting, agrees on geometry/
 
 ### Serving support
 
-Prebuild batch metadata and packed uploads; integrate fused projection/RoPE/gating, logical radix keys and checkpoint ownership, bulk PD staging with per-entry dtypes and target/draft KV matching, CP gather/scatter and completion ordering. Also integrate chunked/external-encoder prefill, profiling ranges and stable gateway worker selection.
+Prebuild metadata/uploads; integrate fused projection/RoPE/gating, prefix/checkpoint ownership, bulk PD staging with mixed dtypes, target/draft matching and CP scatter/completion. Add chunked/external-encoder prefill, profiling and stable gateway routing.
 
 ## Current limitations
 
@@ -60,13 +60,13 @@ Prebuild batch metadata and packed uploads; integrate fused projection/RoPE/gati
 
 ## Accuracy Tests
 
-Head `6ce47b3dd2`, Python 3.12 / CPU Torch on macOS: **604 passed tests** (104 QSA/CP + 128 disaggregation + 372 server-argument tests), plus 431 passing subtests. CUDA cases: 348 skipped, 13 deselected. Three MLX/xgrammar-dependent argument cases were excluded after reproducing failures on the unchanged base.
+Head `6ce47b3dd2`, Python 3.12 / CPU Torch: **604 tests + 431 subtests passed**. CUDA: 348 skipped, 13 deselected. Three MLX/xgrammar-dependent cases also failed on the unchanged base and were excluded.
 
-All 124 changed Python files compiled; runnable pre-commit checks passed. Rust formatting/build/tests remain pending. CPU results do not establish GPU numerical or distributed model accuracy.
+124 Python files compiled; runnable pre-commit checks passed. Rust checks remain pending. GPU/distributed accuracy is not established.
 
 ## Speed Tests and Profiling
 
-No speedup numbers are claimed. Pending: Qwen3.5/Qwen3.8 accuracy, conversion accuracy, multi-rank ragged/empty/prefix cases, end-to-end PD and matched-workload TTFT/throughput/memory/transfer benchmarks. Profiling must establish actual communication/computation overlap and quantify workspace costs.
+No speedup claims. Pending: both models' accuracy, requantization accuracy, multi-rank edge cases, end-to-end PD, and matched TTFT/throughput/memory/transfer benchmarks. Traces must verify overlap and workspace costs.
 
 ## Checklist
 
