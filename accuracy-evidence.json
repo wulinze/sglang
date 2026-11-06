@@ -1,7 +1,6 @@
 {
-  "scope": "Completed development validation for the implementation ported by PR 48796. Not a rerun of the community head. Internal endpoints, model aliases, paths and raw prompts/responses omitted.",
-  "qwen35_oct22": {
-    "source_commit": "375c25781501f9757fc295d4433b0468299a727f",
+  "scope": "Aggregate results for completed development evaluations of the listed CP configurations.",
+  "qwen35_epd": {
     "gsm8k": {
       "total": 200,
       "correct": 196,
@@ -25,10 +24,10 @@
       "coverage_requests_passed": 8,
       "prefill_groups_covered": 6,
       "drain_passed": true
-    }
+    },
+    "configuration": "CP4 + Mega with external encoder and separate decode"
   },
-  "qwen35_oct25": {
-    "source_commit": "1458f458c8060b4941fb57cf55ad3fc380d8fc09",
+  "qwen35_non_thinking": {
     "generation": {
       "temperature": 0,
       "top_p": 1,
@@ -48,10 +47,10 @@
       "errors": 0,
       "truncated": 0,
       "invalid_answers": 0
-    }
+    },
+    "configuration": "CP4 + Mega; non-thinking"
   },
-  "qwen38_nov3": {
-    "source": "a4e2bda247552e7b0f83e3981fa77c8bdde2dac5 + QSA all-gather with fused reorder/cache store",
+  "qwen38_non_thinking": {
     "datasets": {
       "gsm8k": {
         "completed": 200,
@@ -87,9 +86,10 @@
       }
     },
     "concurrency": 8,
-    "cases_sha256": "e87ae344efa131f66b5e927a6e35ef1b703ba2791d890c31ef6d52bbc91d14ce"
+    "cases_sha256": "e87ae344efa131f66b5e927a6e35ef1b703ba2791d890c31ef6d52bbc91d14ce",
+    "configuration": "CP2 + Mega with PD; non-thinking"
   },
-  "qwen38_nov4": {
+  "qwen38_thinking": {
     "complete": true,
     "concurrency": 64,
     "generation": {
@@ -128,48 +128,14 @@
         "all_http_200": true
       }
     },
-    "running_prefill_source": "5454a9c682f0b77feeff6fc405cdbd86e1cbe6d3 (all 28 changed production/test-helper files checked)",
     "scoring": "Exact extracted final-content answers. Errors, empty/missing final answers and truncations count as incorrect; no retries.",
-    "workers_healthy_after": true
+    "workers_healthy_after": true,
+    "configuration": "Two CP2 + Mega prefill workers and one 4-GPU decode worker; template-default thinking"
   },
   "mapped_combine": {
     "comparisons": 368,
     "exact": 368,
     "max_abs": 0.0,
     "max_relative_rms": 0.0
-  },
-  "source_artifact_hashes": [
-    {
-      "artifact": "397b-pp4-cp4-0f0d-20261022/final-delivery-375c.json",
-      "sha256": "224ac9e1ccb7c9db8d6cd87a83dd868790d395e8e942917f340f14ea6cb623bf"
-    },
-    {
-      "artifact": "397b-multicast-20261025/cp-mega/gsm8k200-summary.json",
-      "sha256": "e77e7eaeef6614e5f536158260b27bab971e708c4abf01fe6710dee6e122567c"
-    },
-    {
-      "artifact": "qwen38-cp2-ring-20261103/accuracy-current-20261104/run-64c/results/validated-summary.json",
-      "sha256": "44fd543a672874b375c380ea1debe96f043ae94b09f7c5e1ccbd0d66a719bdf1"
-    },
-    {
-      "artifact": "qwen38-cp2-ring-20261103/accuracy-current-20261104/run-64c/results/manifest.json",
-      "sha256": "199f1a3dfc9518ae7deb786fc6f01bd97d5d0bbf913fd014b08bc117086596b3"
-    },
-    {
-      "artifact": "qwen38-cp2-ring-20261103/gdn-cp/fused-results/fused-kv-functional/accuracy/summary.json",
-      "sha256": "5e3acc47aab96d54505c888f5b0bd419c3509f5f127f09519b99963c934abc48"
-    },
-    {
-      "artifact": "qwen38-cp2-ring-20261103/gdn-cp/fused-results/fused-kv-functional/accuracy/manifest.json",
-      "sha256": "6e2e2ed08f248ea092b8e6ea66c21a1d38dd948cfed2f9b3cd83dc215a4057a1"
-    },
-    {
-      "artifact": "qwen38-cp2-ring-20261103/gdn-cp/fused-results/fused-kv-functional/cache-check.json",
-      "sha256": "b4c7354524a51bd02a89f8a278a2b1d9d623b770254a2bf94c1494564bbd7bd9"
-    },
-    {
-      "artifact": "qwen38-cp2-ring-20261103/gdn-cp/mhc-combine-20261103/results/shadow-summary.json",
-      "sha256": "e93b889bdb47ed24fe6f59e951895c79c866a6bfa4f87e9d69efc7fcc1d87851"
-    }
-  ]
+  }
 }

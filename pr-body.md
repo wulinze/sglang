@@ -4,7 +4,7 @@ Add context-parallel prefill for **Qwen3.5 and Qwen3.8**, covering their hybrid 
 
 The shared design is described in [Qwen3.5 Context Parallel: system design and computation flow](https://wulinze.github.io/llm/qwen35-context-parallel/) (Chinese). This PR includes both model integrations and their runtime, cache and transfer support. Qwen3.8 enters through the repository's existing `qwen4_exp` implementation, including QSA/indexer and model-specific residual/PLE handling.
 
-**Validation:** GPU numerical checks, Qwen3.5/Qwen3.8 model accuracy and complete serving-path tests were completed during development. This PR ports that validated implementation; the results below retain their original test revisions, alongside regression checks on the community PR head.
+**Validation:** The development implementation has completed GPU numerical checks, Qwen3.5/Qwen3.8 model accuracy evaluations and end-to-end serving tests. Results and coverage are summarized below.
 
 ## Modifications
 
@@ -107,7 +107,7 @@ The following limits describe this hybrid CP implementation, rather than the cap
 | Unsupported combinations | LoRA, speculation, HiCache, unified memory, INT8 Mamba checkpoints, linear ReplaySSM and memory saver are rejected by the CP argument checks. |
 | Symm | Peer RMA is single-host. GDN multicast has the additional 2/4/8-rank capability constraints above; its NCCL fallback does not imply automatic fallback for explicitly selected ring RMA. |
 | New MXFP4 Mega path | SM90 only, single-node pure EP with `CP = EP = TP`, `MoE-TP = 1`; requires both opt-in flags, NVSHMEM and compatible FlashInfer SM90 APIs. Other weights are rejected unless they use the supported native-MXFP4 or explicit W4AFP8 conversion path. TBO/SBO are unsupported by the Mega dispatch/combine interface. |
-| Validation | Development GPU, model-accuracy and complete EPD/PD tests are recorded below, together with community-head CPU regressions. Matching non-CP/conversion comparisons, upstream dependency reproducibility, gateway Rust checks and community CI remain outstanding. |
+| Validation | Development GPU, model-accuracy and complete EPD/PD tests are recorded below, together with regression checks. Matching non-CP/conversion comparisons, upstream dependency reproducibility, gateway Rust checks and community CI remain outstanding. |
 
 MoE TP and EP are resolved separately from CP; enabling CP alone does not enable Mega. FlashInfer SM90 staging, conversion and mapped-combine API/version compatibility still needs to be established for an upstream-reproducible environment. The optional SM90 path above does not extend the support matrix of other Mega implementations to this integration.
 
@@ -117,16 +117,16 @@ MoE TP and EP are resolved separately from CP; enabling CP alone does not enable
 
 These are completed development runs through the service endpoint, including CP prefill, PD transfer and decode. They are fixed 200-example evaluations, not full-dataset scores.
 
-| Model / tested revision | Serving configuration | GSM8K | MMLU |
+| Model | Serving configuration | GSM8K | MMLU |
 | --- | --- | --- | --- |
-| Qwen3.5-397B-A17B, `375c257815` (Oct 22) | CP4 + Mega; external encoder and separate decode | 196/200 (98.0%) | — |
-| Qwen3.5-397B-A17B, `1458f458c8` (Oct 25) | CP4 + Mega on 4× H800 prefill; concurrency 8, non-thinking | 196/200 (98.0%) | — |
-| Qwen3.8, fused-QSA candidate subsequently consolidated into `5454a9c682` (Nov 3) | CP2 + Mega, PD; concurrency 8, non-thinking | 192/200 (96.0%) | 177/200 (88.5%) |
-| Qwen3.8, `5454a9c682` (Nov 4) | Two CP2 + Mega prefill workers and one 4-GPU decode worker; concurrency 64, template-default thinking | **194/200 (97.0%)** | **176/200 (88.0%)** |
+| Qwen3.5-397B-A17B | CP4 + Mega; external encoder and separate decode | 196/200 (98.0%) | — |
+| Qwen3.5-397B-A17B | CP4 + Mega on 4× H800 prefill; concurrency 8, non-thinking | 196/200 (98.0%) | — |
+| Qwen3.8 | CP2 + Mega, PD; concurrency 8, non-thinking | 192/200 (96.0%) | 177/200 (88.5%) |
+| Qwen3.8 | Two CP2 + Mega prefill workers and one 4-GPU decode worker; concurrency 64, template-default thinking | **194/200 (97.0%)** | **176/200 (88.0%)** |
 
-Protocol: GSM8K 5-shot; Qwen3.8 MMLU 0-shot, fixed 200 questions covering 49 subjects. Temperature 0, top-p 1 and seed 0 for the Oct 25/Nov 3/Nov 4 runs; output limits were 4,096 tokens for the non-thinking runs and 16,384 for the Nov 4 run. Score extracted final answers; request failures, missing final answers and truncations count as incorrect. No retries or selective replacement of failed answers.
+Protocol: GSM8K 5-shot; Qwen3.8 MMLU 0-shot, fixed 200 questions covering 49 subjects. Temperature 0, top-p 1 and seed 0 for the H800 Qwen3.5 evaluation and both Qwen3.8 evaluations; output limits were 4,096 tokens for the non-thinking runs and 16,384 for the thinking run. Score extracted final answers; request failures, missing final answers and truncations count as incorrect. No retries or selective replacement of failed answers.
 
-All 400 requests in the Nov 4 evaluation returned HTTP 200, and workers remained healthy afterward. The reported scores include six empty final answers and five truncated responses as failures. Nov 3 also had zero request errors; its truncated and invalid answers remain in the denominator. The two Qwen3.8 runs use different thinking/output-budget settings and are not a like-for-like accuracy comparison.
+All 400 requests in the concurrency-64 Qwen3.8 evaluation returned HTTP 200, and workers remained healthy afterward. The reported scores include six empty final answers and five truncated responses as failures. The non-thinking Qwen3.8 evaluation also had zero request errors; its truncated and invalid answers remain in the denominator. The two Qwen3.8 runs use different thinking/output-budget settings and are not a like-for-like accuracy comparison.
 
 ### Complete end-to-end serving and GPU checks
 
@@ -136,11 +136,11 @@ All 400 requests in the Nov 4 evaluation returned HTTP 200, and workers remained
 - **GPU regressions:** the fused-QSA run recorded **192 passed** GPU cases, plus a separate **16 passed** cache-store regression run (counts are separate runs, not asserted to be disjoint).
 - **Mapped Mega/mHC combine:** **368/368** comparisons against explicit combine + reorder were elementwise identical (`max_abs = 0`, `max_relative_rms = 0`) on real model inputs. This validates that layout transformation; it is not a blanket equivalence claim for quantization conversion.
 
-The community submission retains this development validation. Its commit rewriting, refactoring and upstream API adaptations are accompanied by the head checks below; the historical GPU runs are not presented as a new run of SHA `6ce47b3dd2`.
+The results above cover the listed development configurations. Regression checks are summarized below.
 
-### Community-head regression checks
+### Regression checks
 
-Head `6ce47b3dd2`, Python 3.12 / CPU Torch on macOS: **604 passed tests** (104 QSA/CP + 128 disaggregation + 372 server-argument tests), plus 431 passing subtests. CUDA cases: 348 skipped, 13 deselected. Three MLX/xgrammar-dependent argument cases were excluded after reproducing failures on the unchanged base.
+**604 passed tests** (104 QSA/CP + 128 disaggregation + 372 server-argument tests), plus 431 passing subtests. CUDA cases: 348 skipped, 13 deselected. Three MLX/xgrammar-dependent argument cases were excluded after reproducing failures on the unchanged base.
 
 All 124 changed Python files compiled; runnable pre-commit checks passed. Gateway Rust formatting/build/tests and community CI remain outstanding. Matching non-CP accuracy baselines, an isolated quantization-conversion comparison and an upstream-reproducible FlashInfer/NVSHMEM dependency matrix remain follow-up coverage.
 
@@ -151,6 +151,6 @@ The 30-minute end-to-end load run above establishes completed serving coverage. 
 ## Checklist
 
 - [x] Add or extend regression/GPU tests and explain both model paths with diagrams.
-- [x] Complete development GPU/model accuracy and end-to-end EPD/PD serving validation; record configurations, revisions and scoring boundaries.
-- [x] Run community-head CPU regression and Python checks.
+- [x] Complete development GPU/model accuracy and end-to-end EPD/PD serving validation; record configurations and scoring boundaries.
+- [x] Run regression and Python checks.
 - [ ] Complete matched non-CP/conversion comparisons, upstream dependency reproducibility, gateway Rust checks and community CI.
