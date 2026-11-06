@@ -1,1 +1,1 @@
-[Feat] cp: Add context-parallel prefill for Qwen3.5 and Qwen3.8
+[Feat] cp: Add Qwen3.5/Qwen3.8 prefill with Symm and MegaMoE

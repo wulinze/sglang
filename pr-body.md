@@ -75,11 +75,41 @@ Model integration also handles strided GDN projections, external-encoder embeddi
 | Scheduling and warmup | Chunked and external-encoder multimodal prefill integration; reserve communication/expert workspaces before KV budgeting and run compilation/tuning through ModelRunner |
 | Observability and routing | Runtime/HTTP profiling controls and execution ranges; stable worker selection and consistent hash-ring membership updates in the gateway to preserve session/cache locality |
 
-### Current scope and dependencies
+### Symmetric-memory integration
 
-The sharded GDN path currently validates `CP = TP >= 2`, PD prefill with Mooncake, and `DP = attention-DP = PP = MoE-DP = DCP = 1`. It requires BF16 model execution, GDN key/value head dimensions of 128, a page size divisible by CP and explicit `max-running-requests`. Multimodal use requires an external encoder and a language-only prefill worker. This path runs eagerly; speculation, LoRA, HiCache and the incompatible state-compression/memory modes are rejected by argument validation.
+Reuse `TorchSymmMemCommunicator` as the group/device resource owner for peer RMA, ring buffers, peer-state publication and multicast broadcast. These resources are independent of the optional symmetric all-reduce eligibility; enabling CP transport does not require enabling a new attention backend or changing every collective in the model.
 
-MoE TP and EP are resolved separately from CP. The optional SM90 MXFP4 Mega path requires single-node pure EP with `CP = EP = TP`, NVSHMEM and compatible FlashInfer SM90 staging/megakernel APIs. These external APIs still need version-compatibility validation; enabling CP alone does not enable Mega. The new `flashqla` optional dependency pins `flash-qla==0.1.3`.
+- `--attn-cp-transport nccl|symm_rma` selects the transport for the full-attention KV ring and the QSA index-key ring. The two rings retain separate workspaces and message semantics. Double-buffered payloads, arrival/credit signals and explicit producer/consumer stream ordering protect slot reuse.
+- GDN publishes local affine state summaries for ordered peer-prefix computation and broadcasts the initial/checkpoint state from its actual owner when multicast is available. Startup capability agreement is collective across the group; unavailable multicast/state prerequisites select the NCCL state path and log the reason. This is separate from the explicit attention-ring transport setting.
+- Residual/token layout exchange can use persistent symmetric peer-row buffers on a dedicated stream, with precomputed source/destination ranges and events. Mapped Mega output also uses Torch symmetric peer destinations while retaining the Mega runtime's own NVSHMEM workspaces.
+
+Peer RMA requires all ranks on one host, Torch's CUDA symmetric allocator and working peer mappings. The GDN multicast path additionally requires 2, 4 or 8 ranks, SM90-or-newer multicast capability and CUDA stream memory operations on every participating rank. Explicit `symm_rma` selection raises an error when its prerequisites fail; users must select NCCL for the ring in that situation. Communication buffers have fixed capacities and stream ownership; graph capture is not supported on these paths.
+
+### MegaMoE integration
+
+The new opt-in path is selected by `--enable-mxfp4-mega` together with `--moe-a2a-backend megamoe`. It enters the existing FusedMoE and quantization interfaces. Native MXFP4 experts are prepared through the Humming path; W4AFP8 experts use an explicit post-load INT4-to-MXFP4 requantization and Mega weight-packing step. That conversion changes the numerical representation and requires accuracy evaluation.
+
+SGLang retains routing, top-k expert IDs/weights and shared-expert handling. FlashInfer stages activations/routing and executes the SM90 experts using NVSHMEM workspaces. When the next layer needs another token layout, the combine kernel receives destination rank/row indices and peer pointers, incorporating shared outputs/gates as it writes directly to that layout. Residual or mHC exchange uses the same row plan. This removes the corresponding standalone output redistribution where enabled; expert dispatch/combine communication still occurs.
+
+ModelRunner warmup allocates capacity from the request/chunk/context bounds, agrees on workspace geometry/tactics across EP ranks, compiles both ordinary and mapped-combine launch variants, and accounts for reserved memory before KV budgeting. Serving reuses the warmed workspace on its bound stream. Outputs borrow that workspace and must be consumed before reuse; empty local ranks still participate in the EP operation.
+
+### Current limitations and dependencies
+
+The following limits describe this hybrid CP implementation, rather than the capabilities of every existing SGLang backend:
+
+| Area | Current implementation boundary |
+| --- | --- |
+| Parallel topology / serving | PD prefill with `mooncake` or `mooncake_tcp`; `CP = TP >= 2`; `DP = attention-DP = PP = MoE-DP = DCP = 1`. These row plans do not compose with attention head sharding or pipeline-stage boundaries. Decode-side CP and speculative execution are outside this path. |
+| GDN hardware / dependencies | FlashQLA explicitly checks SM90, SM100 or SM103; `flash-qla==0.1.3` and `tilelang>=0.1.12` are required. Key/value head dimensions must both be 128 and model execution must be BF16. |
+| Storage / bounds | Positive explicit `max-running-requests` and page size divisible by CP; ring/Mega workspaces use bounded startup geometry. QSA interleave warmup requires a positive prefill chunk size. |
+| Attention | Sharded full attention uses FA3 or TRT-LLM MHA; Qwen3.8 retains the QSA backend. FA3's FP8 E5M2 restriction remains. The prefill worker does not use a separately selected decode attention backend. |
+| Multimodal / execution | External encoder plus language-only prefill worker; inline vision encoding is unsupported. CUDA graph phases are disabled for this GDN CP path. |
+| Unsupported combinations | LoRA, speculation, HiCache, unified memory, INT8 Mamba checkpoints, linear ReplaySSM and memory saver are rejected by the CP argument checks. |
+| Symm | Peer RMA is single-host. GDN multicast has the additional 2/4/8-rank capability constraints above; its NCCL fallback does not imply automatic fallback for explicitly selected ring RMA. |
+| New MXFP4 Mega path | SM90 only, single-node pure EP with `CP = EP = TP`, `MoE-TP = 1`; requires both opt-in flags, NVSHMEM and compatible FlashInfer SM90 APIs. Other weights are rejected unless they use the supported native-MXFP4 or explicit W4AFP8 conversion path. TBO/SBO are unsupported by the Mega dispatch/combine interface. |
+| Validation | CPU regressions cover selected contracts. Multi-GPU accuracy, quantization-conversion accuracy, end-to-end PD behavior and performance remain unvalidated for this head; gateway Rust checks are also pending. |
+
+MoE TP and EP are resolved separately from CP; enabling CP alone does not enable Mega. FlashInfer SM90 staging, conversion and mapped-combine API/version compatibility still needs to be established for an upstream-reproducible environment. The optional SM90 path above does not extend the support matrix of other Mega implementations to this integration.
 
 ## Accuracy Tests
 
