@@ -48,7 +48,7 @@ ModelRunner reserves bounded workspaces before KV budgeting, agrees on geometry/
 
 ### Serving support
 
-Prebuild batch metadata and packed uploads; integrate fused projection/RoPE/gating, logical radix keys and checkpoint ownership, bulk PD staging with per-entry dtypes and target/draft KV matching, CP gather/scatter and completion ordering. Also integrate chunked/external-encoder prefill, profiling ranges and stable gateway worker selection.
+Prebuild batch metadata and packed uploads; integrate fused projection/RoPE/gating, logical radix keys and checkpoint ownership, bulk PD staging with per-entry dtypes and target/draft KV matching, CP gather/scatter and completion ordering. Also integrate chunked/external-encoder prefill, profiling ranges.
 
 ## Current limitations
 
@@ -91,7 +91,7 @@ The results above cover the listed development configurations. Regression checks
 
 **604 passed tests** (104 QSA/CP + 128 disaggregation + 372 server-argument tests), plus 431 passing subtests. CUDA cases: 348 skipped, 13 deselected. Three MLX/xgrammar-dependent argument cases were excluded after reproducing failures on the unchanged base.
 
-All 124 changed Python files compiled; runnable pre-commit checks passed. Gateway Rust formatting/build/tests and community CI remain outstanding. Matching non-CP accuracy baselines, an isolated quantization-conversion comparison and an upstream-reproducible FlashInfer/NVSHMEM dependency matrix remain follow-up coverage.
+All 124 changed Python files compiled; runnable pre-commit checks passed. Community CI remains outstanding. Matching non-CP accuracy baselines, an isolated quantization-conversion comparison and an upstream-reproducible FlashInfer/NVSHMEM dependency matrix remain follow-up coverage.
 
 ## Speed Tests and Profiling
 
@@ -102,4 +102,4 @@ The 30-minute end-to-end load run above establishes completed serving coverage. 
 - [x] Add or extend regression/GPU tests and explain both model paths with diagrams.
 - [x] Complete development GPU/model accuracy and end-to-end EPD/PD serving validation; record configurations and scoring boundaries.
 - [x] Run regression and Python checks.
-- [ ] Complete matched non-CP/conversion comparisons, upstream dependency reproducibility, gateway Rust checks and community CI.
+- [ ] Complete matched non-CP/conversion comparisons, upstream dependency reproducibility and community CI.

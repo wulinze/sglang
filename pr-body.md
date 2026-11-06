@@ -73,7 +73,7 @@ Model integration also handles strided GDN projections, external-encoder embeddi
 | Cache and allocation | Shard logical KV and Mamba checkpoint storage, preserve logical radix keys, and track compatible KV/state boundaries for prefix hits |
 | PD transfer | Bulk staging with per-entry byte sizes/dtypes, target/draft KV slot matching, CP page gather/scatter, state-owner selection and completion ordering; handle unwritten staging rows in the fallback path |
 | Scheduling and warmup | Chunked and external-encoder multimodal prefill integration; reserve communication/expert workspaces before KV budgeting and run compilation/tuning through ModelRunner |
-| Observability and routing | Runtime/HTTP profiling controls and execution ranges; stable worker selection and consistent hash-ring membership updates in the gateway to preserve session/cache locality |
+| Observability | Runtime/HTTP profiling controls and execution ranges |
 
 ### Symmetric-memory integration
 
@@ -107,7 +107,7 @@ The following limits describe this hybrid CP implementation, rather than the cap
 | Unsupported combinations | LoRA, speculation, HiCache, unified memory, INT8 Mamba checkpoints, linear ReplaySSM and memory saver are rejected by the CP argument checks. |
 | Symm | Peer RMA is single-host. GDN multicast has the additional 2/4/8-rank capability constraints above; its NCCL fallback does not imply automatic fallback for explicitly selected ring RMA. |
 | New MXFP4 Mega path | SM90 only, single-node pure EP with `CP = EP = TP`, `MoE-TP = 1`; requires both opt-in flags, NVSHMEM and compatible FlashInfer SM90 APIs. Other weights are rejected unless they use the supported native-MXFP4 or explicit W4AFP8 conversion path. TBO/SBO are unsupported by the Mega dispatch/combine interface. |
-| Validation | Development GPU, model-accuracy and complete EPD/PD tests are recorded below, together with regression checks. Matching non-CP/conversion comparisons, upstream dependency reproducibility, gateway Rust checks and community CI remain outstanding. |
+| Validation | Development GPU, model-accuracy and complete EPD/PD tests are recorded below, together with regression checks. Matching non-CP/conversion comparisons, upstream dependency reproducibility and community CI remain outstanding. |
 
 MoE TP and EP are resolved separately from CP; enabling CP alone does not enable Mega. FlashInfer SM90 staging, conversion and mapped-combine API/version compatibility still needs to be established for an upstream-reproducible environment. The optional SM90 path above does not extend the support matrix of other Mega implementations to this integration.
 
@@ -142,7 +142,7 @@ The results above cover the listed development configurations. Regression checks
 
 **604 passed tests** (104 QSA/CP + 128 disaggregation + 372 server-argument tests), plus 431 passing subtests. CUDA cases: 348 skipped, 13 deselected. Three MLX/xgrammar-dependent argument cases were excluded after reproducing failures on the unchanged base.
 
-All 124 changed Python files compiled; runnable pre-commit checks passed. Gateway Rust formatting/build/tests and community CI remain outstanding. Matching non-CP accuracy baselines, an isolated quantization-conversion comparison and an upstream-reproducible FlashInfer/NVSHMEM dependency matrix remain follow-up coverage.
+All 124 changed Python files compiled; runnable pre-commit checks passed. Community CI remains outstanding. Matching non-CP accuracy baselines, an isolated quantization-conversion comparison and an upstream-reproducible FlashInfer/NVSHMEM dependency matrix remain follow-up coverage.
 
 ## Speed Tests and Profiling
 
@@ -153,4 +153,4 @@ The 30-minute end-to-end load run above establishes completed serving coverage. 
 - [x] Add or extend regression/GPU tests and explain both model paths with diagrams.
 - [x] Complete development GPU/model accuracy and end-to-end EPD/PD serving validation; record configurations and scoring boundaries.
 - [x] Run regression and Python checks.
-- [ ] Complete matched non-CP/conversion comparisons, upstream dependency reproducibility, gateway Rust checks and community CI.
+- [ ] Complete matched non-CP/conversion comparisons, upstream dependency reproducibility and community CI.
