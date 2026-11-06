@@ -1,0 +1,175 @@
+{
+  "scope": "Completed development validation for the implementation ported by PR 48796. Not a rerun of the community head. Internal endpoints, model aliases, paths and raw prompts/responses omitted.",
+  "qwen35_oct22": {
+    "source_commit": "375c25781501f9757fc295d4433b0468299a727f",
+    "gsm8k": {
+      "total": 200,
+      "correct": 196,
+      "accuracy": 0.98,
+      "errors": 0,
+      "retries": 0,
+      "full_test_set": false
+    },
+    "load": {
+      "duration_seconds": 1800,
+      "failed_requests": 0
+    },
+    "load_metrics": {
+      "qps": 3.59,
+      "islAvg": 51839,
+      "totalRequests": 6462,
+      "successRequests": 6462
+    },
+    "e2e": {
+      "fixed_smoke_passed": 15,
+      "coverage_requests_passed": 8,
+      "prefill_groups_covered": 6,
+      "drain_passed": true
+    }
+  },
+  "qwen35_oct25": {
+    "source_commit": "1458f458c8060b4941fb57cf55ad3fc380d8fc09",
+    "generation": {
+      "temperature": 0,
+      "top_p": 1,
+      "seed": 0,
+      "max_tokens": 4096,
+      "n": 1,
+      "stream": false,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    "concurrency": 8,
+    "gsm8k": {
+      "denominator": 200,
+      "correct": 196,
+      "accuracy": 0.98,
+      "errors": 0,
+      "truncated": 0,
+      "invalid_answers": 0
+    }
+  },
+  "qwen38_nov3": {
+    "source": "a4e2bda247552e7b0f83e3981fa77c8bdde2dac5 + QSA all-gather with fused reorder/cache store",
+    "datasets": {
+      "gsm8k": {
+        "completed": 200,
+        "total": 200,
+        "correct": 192,
+        "accuracy": 0.96,
+        "accuracy_completed": 0.96,
+        "errors": 0,
+        "truncated": 2,
+        "invalid_answer": 4,
+        "pass": true
+      },
+      "mmlu": {
+        "completed": 200,
+        "total": 200,
+        "correct": 177,
+        "accuracy": 0.885,
+        "accuracy_completed": 0.885,
+        "errors": 0,
+        "truncated": 2,
+        "invalid_answer": 5,
+        "pass": true
+      }
+    },
+    "generation": {
+      "temperature": 0,
+      "top_p": 1,
+      "seed": 0,
+      "max_tokens": 4096,
+      "stream": false,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    "concurrency": 8,
+    "cases_sha256": "e87ae344efa131f66b5e927a6e35ef1b703ba2791d890c31ef6d52bbc91d14ce"
+  },
+  "qwen38_nov4": {
+    "complete": true,
+    "concurrency": 64,
+    "generation": {
+      "temperature": 0,
+      "top_p": 1,
+      "seed": 0,
+      "max_tokens": 16384,
+      "stream": false
+    },
+    "thinking": "template defaults to enabled, xhigh; request did not override it",
+    "datasets": {
+      "gsm8k": {
+        "samples": 200,
+        "correct": 194,
+        "accuracy": 0.97,
+        "failures": {
+          "wrong_answer": 2,
+          "empty_final": 2,
+          "truncated": 2
+        },
+        "nonempty_reasoning_responses": 7,
+        "total_completion_tokens": 81562,
+        "all_http_200": true
+      },
+      "mmlu": {
+        "samples": 200,
+        "correct": 176,
+        "accuracy": 0.88,
+        "failures": {
+          "wrong_answer": 17,
+          "empty_final": 4,
+          "truncated": 3
+        },
+        "nonempty_reasoning_responses": 199,
+        "total_completion_tokens": 175162,
+        "all_http_200": true
+      }
+    },
+    "running_prefill_source": "5454a9c682f0b77feeff6fc405cdbd86e1cbe6d3 (all 28 changed production/test-helper files checked)",
+    "scoring": "Exact extracted final-content answers. Errors, empty/missing final answers and truncations count as incorrect; no retries.",
+    "workers_healthy_after": true
+  },
+  "mapped_combine": {
+    "comparisons": 368,
+    "exact": 368,
+    "max_abs": 0.0,
+    "max_relative_rms": 0.0
+  },
+  "source_artifact_hashes": [
+    {
+      "artifact": "397b-pp4-cp4-0f0d-20261022/final-delivery-375c.json",
+      "sha256": "224ac9e1ccb7c9db8d6cd87a83dd868790d395e8e942917f340f14ea6cb623bf"
+    },
+    {
+      "artifact": "397b-multicast-20261025/cp-mega/gsm8k200-summary.json",
+      "sha256": "e77e7eaeef6614e5f536158260b27bab971e708c4abf01fe6710dee6e122567c"
+    },
+    {
+      "artifact": "qwen38-cp2-ring-20261103/accuracy-current-20261104/run-64c/results/validated-summary.json",
+      "sha256": "44fd543a672874b375c380ea1debe96f043ae94b09f7c5e1ccbd0d66a719bdf1"
+    },
+    {
+      "artifact": "qwen38-cp2-ring-20261103/accuracy-current-20261104/run-64c/results/manifest.json",
+      "sha256": "199f1a3dfc9518ae7deb786fc6f01bd97d5d0bbf913fd014b08bc117086596b3"
+    },
+    {
+      "artifact": "qwen38-cp2-ring-20261103/gdn-cp/fused-results/fused-kv-functional/accuracy/summary.json",
+      "sha256": "5e3acc47aab96d54505c888f5b0bd419c3509f5f127f09519b99963c934abc48"
+    },
+    {
+      "artifact": "qwen38-cp2-ring-20261103/gdn-cp/fused-results/fused-kv-functional/accuracy/manifest.json",
+      "sha256": "6e2e2ed08f248ea092b8e6ea66c21a1d38dd948cfed2f9b3cd83dc215a4057a1"
+    },
+    {
+      "artifact": "qwen38-cp2-ring-20261103/gdn-cp/fused-results/fused-kv-functional/cache-check.json",
+      "sha256": "b4c7354524a51bd02a89f8a278a2b1d9d623b770254a2bf94c1494564bbd7bd9"
+    },
+    {
+      "artifact": "qwen38-cp2-ring-20261103/gdn-cp/mhc-combine-20261103/results/shadow-summary.json",
+      "sha256": "e93b889bdb47ed24fe6f59e951895c79c866a6bfa4f87e9d69efc7fcc1d87851"
+    }
+  ]
+}

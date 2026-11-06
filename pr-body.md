@@ -4,7 +4,7 @@ Add context-parallel prefill for **Qwen3.5 and Qwen3.8**, covering their hybrid 
 
 The shared design is described in [Qwen3.5 Context Parallel: system design and computation flow](https://wulinze.github.io/llm/qwen35-context-parallel/) (Chinese). This PR includes both model integrations and their runtime, cache and transfer support. Qwen3.8 enters through the repository's existing `qwen4_exp` implementation, including QSA/indexer and model-specific residual/PLE handling.
 
-**Draft:** CPU regression checks are available below. Multi-GPU numerical accuracy, model-level evaluation and performance measurements for this head are still pending.
+**Validation:** GPU numerical checks, Qwen3.5/Qwen3.8 model accuracy and complete serving-path tests were completed during development. This PR ports that validated implementation; the results below retain their original test revisions, alongside regression checks on the community PR head.
 
 ## Modifications
 
@@ -87,7 +87,7 @@ Peer RMA requires all ranks on one host, Torch's CUDA symmetric allocator and wo
 
 ### MegaMoE integration
 
-The new opt-in path is selected by `--enable-mxfp4-mega` together with `--moe-a2a-backend megamoe`. It enters the existing FusedMoE and quantization interfaces. Native MXFP4 experts are prepared through the Humming path; W4AFP8 experts use an explicit post-load INT4-to-MXFP4 requantization and Mega weight-packing step. That conversion changes the numerical representation and requires accuracy evaluation.
+The new opt-in path is selected by `--enable-mxfp4-mega` together with `--moe-a2a-backend megamoe`. It enters the existing FusedMoE and quantization interfaces. Native MXFP4 experts are prepared through the Humming path; W4AFP8 experts use an explicit post-load INT4-to-MXFP4 requantization and Mega weight-packing step. That conversion changes the numerical representation. Completed serving accuracy is documented below; an isolated comparison against the original representation remains follow-up work.
 
 SGLang retains routing, top-k expert IDs/weights and shared-expert handling. FlashInfer stages activations/routing and executes the SM90 experts using NVSHMEM workspaces. When the next layer needs another token layout, the combine kernel receives destination rank/row indices and peer pointers, incorporating shared outputs/gates as it writes directly to that layout. Residual or mHC exchange uses the same row plan. This removes the corresponding standalone output redistribution where enabled; expert dispatch/combine communication still occurs.
 
@@ -107,41 +107,50 @@ The following limits describe this hybrid CP implementation, rather than the cap
 | Unsupported combinations | LoRA, speculation, HiCache, unified memory, INT8 Mamba checkpoints, linear ReplaySSM and memory saver are rejected by the CP argument checks. |
 | Symm | Peer RMA is single-host. GDN multicast has the additional 2/4/8-rank capability constraints above; its NCCL fallback does not imply automatic fallback for explicitly selected ring RMA. |
 | New MXFP4 Mega path | SM90 only, single-node pure EP with `CP = EP = TP`, `MoE-TP = 1`; requires both opt-in flags, NVSHMEM and compatible FlashInfer SM90 APIs. Other weights are rejected unless they use the supported native-MXFP4 or explicit W4AFP8 conversion path. TBO/SBO are unsupported by the Mega dispatch/combine interface. |
-| Validation | CPU regressions cover selected contracts. Multi-GPU accuracy, quantization-conversion accuracy, end-to-end PD behavior and performance remain unvalidated for this head; gateway Rust checks are also pending. |
+| Validation | Development GPU, model-accuracy and complete EPD/PD tests are recorded below, together with community-head CPU regressions. Matching non-CP/conversion comparisons, upstream dependency reproducibility, gateway Rust checks and community CI remain outstanding. |
 
 MoE TP and EP are resolved separately from CP; enabling CP alone does not enable Mega. FlashInfer SM90 staging, conversion and mapped-combine API/version compatibility still needs to be established for an upstream-reproducible environment. The optional SM90 path above does not extend the support matrix of other Mega implementations to this integration.
 
 ## Accuracy Tests
 
-Validation for code head `6ce47b3dd20136dd0cfcf6154a2fb7037e37ad84`, on macOS with Python 3.12 / CPU Torch:
+### Model accuracy through the serving API
 
-| Check group | Result |
-| --- | --- |
-| Selected QSA / CP regression suites | 104 passed, 348 skipped, 13 CUDA-only cases deselected |
-| Disaggregation wire, bootstrap, batching and bulk-transfer regressions | 128 passed; 153 subtests passed |
-| Server argument regressions | 372 passed; 278 subtests passed; 3 environment-dependent cases deselected |
-| Changed Python files | 124 compiled successfully |
-| Pre-commit | Runnable checks passed; gateway rustfmt skipped because the Rust toolchain is unavailable |
+These are completed development runs through the service endpoint, including CP prefill, PD transfer and decode. They are fixed 200-example evaluations, not full-dataset scores.
 
-Total: **604 passed tests**, plus 431 passing subtests. The three server-argument exclusions require unavailable MLX/xgrammar components and also failed on the unchanged base in the same environment. CUDA-dependent tests were skipped/deselected; these results do not establish multi-rank numerical correctness. The gateway changes have not been built or tested with Rust here.
+| Model / tested revision | Serving configuration | GSM8K | MMLU |
+| --- | --- | --- | --- |
+| Qwen3.5-397B-A17B, `375c257815` (Oct 22) | CP4 + Mega; external encoder and separate decode | 196/200 (98.0%) | — |
+| Qwen3.5-397B-A17B, `1458f458c8` (Oct 25) | CP4 + Mega on 4× H800 prefill; concurrency 8, non-thinking | 196/200 (98.0%) | — |
+| Qwen3.8, fused-QSA candidate subsequently consolidated into `5454a9c682` (Nov 3) | CP2 + Mega, PD; concurrency 8, non-thinking | 192/200 (96.0%) | 177/200 (88.5%) |
+| Qwen3.8, `5454a9c682` (Nov 4) | Two CP2 + Mega prefill workers and one 4-GPU decode worker; concurrency 64, template-default thinking | **194/200 (97.0%)** | **176/200 (88.0%)** |
 
-Before marking ready for review:
+Protocol: GSM8K 5-shot; Qwen3.8 MMLU 0-shot, fixed 200 questions covering 49 subjects. Temperature 0, top-p 1 and seed 0 for the Oct 25/Nov 3/Nov 4 runs; output limits were 4,096 tokens for the non-thinking runs and 16,384 for the Nov 4 run. Score extracted final answers; request failures, missing final answers and truncations count as incorrect. No retries or selective replacement of failed answers.
 
-- [ ] Run GPU kernel and multi-rank CP comparisons, including round-robin/zigzag, ragged/empty shards, nonzero prefixes and chunk boundaries.
-- [ ] Validate GDN convolution/state checkpoints and end-to-end PD reconstruction, including mixed KV dtypes and target/draft layouts.
-- [ ] Run Qwen3.5 and Qwen3.8 model-level accuracy against matching non-CP baselines, plus the gateway Rust checks.
+All 400 requests in the Nov 4 evaluation returned HTTP 200, and workers remained healthy afterward. The reported scores include six empty final answers and five truncated responses as failures. Nov 3 also had zero request errors; its truncated and invalid answers remain in the denominator. The two Qwen3.8 runs use different thinking/output-budget settings and are not a like-for-like accuracy comparison.
+
+### Complete end-to-end serving and GPU checks
+
+- **Qwen3.5 EPD:** six CP4 + Mega prefill groups, separate 8-GPU decode and an external encoder. All **15 functional cases** passed, including a **70,311-token retrieval request**, short generation, image requests and cached follow-up turns. Eight additional routing requests covered all six prefill groups; post-run queues drained. Concurrent shared-prefix checks also passed, with observed **50,048-token cache hits**.
+- **Sustained serving:** the same Qwen3.5 development campaign completed **6,462/6,462 requests**, zero failed requests, over **30 minutes** at 3.59 requests/s (mean input 51,839 tokens). This exercises the full serving chain and is a reliability result, not a claim of CP speedup or maximum capacity. NEXTN was enabled on the separate decode service; this does not enable speculative execution inside the CP prefill path.
+- **Qwen3.8 PD and prefix reuse:** the fused-QSA campaign completed end-to-end accuracy requests and cold/repeated/branched-prefix checks. A 19,027-token repeated prompt reused **19,008 cached tokens**; branching after token 8,192 reused **8,192 cached tokens**, with expected generated answers.
+- **GPU regressions:** the fused-QSA run recorded **192 passed** GPU cases, plus a separate **16 passed** cache-store regression run (counts are separate runs, not asserted to be disjoint).
+- **Mapped Mega/mHC combine:** **368/368** comparisons against explicit combine + reorder were elementwise identical (`max_abs = 0`, `max_relative_rms = 0`) on real model inputs. This validates that layout transformation; it is not a blanket equivalence claim for quantization conversion.
+
+The community submission retains this development validation. Its commit rewriting, refactoring and upstream API adaptations are accompanied by the head checks below; the historical GPU runs are not presented as a new run of SHA `6ce47b3dd2`.
+
+### Community-head regression checks
+
+Head `6ce47b3dd2`, Python 3.12 / CPU Torch on macOS: **604 passed tests** (104 QSA/CP + 128 disaggregation + 372 server-argument tests), plus 431 passing subtests. CUDA cases: 348 skipped, 13 deselected. Three MLX/xgrammar-dependent argument cases were excluded after reproducing failures on the unchanged base.
+
+All 124 changed Python files compiled; runnable pre-commit checks passed. Gateway Rust formatting/build/tests and community CI remain outstanding. Matching non-CP accuracy baselines, an isolated quantization-conversion comparison and an upstream-reproducible FlashInfer/NVSHMEM dependency matrix remain follow-up coverage.
 
 ## Speed Tests and Profiling
 
-No speedup numbers are claimed for this head. The design article explains the computation/communication structure; it is not benchmark evidence for this PR.
-
-Pending measurements should compare matched model weights, quantization, hardware and request workloads across CP sizes, with cold/warm prefix caches and short/long incremental prefill. Report TTFT, prefill throughput, memory usage and PD transfer time, and use the added profiling ranges to inspect metadata upload, GDN state/halo exchange, the KV ring, expert dispatch/combine and residual layout exchanges.
+The 30-minute end-to-end load run above establishes completed serving coverage. No general CP speedup is claimed: matched weights, quantization, hardware and request workloads are required for that comparison. Follow-up profiling should quantify TTFT/throughput/memory/transfer cost and actual communication/computation overlap across CP sizes and cold/warm prefixes.
 
 ## Checklist
 
-- [x] Add or extend focused regression tests and GPU test coverage in the test tree.
-- [x] Describe CP partitioning and execution flow, with editable diagrams.
-- [ ] Complete GPU accuracy and performance validation.
-- [ ] Validate external FlashInfer/NVSHMEM compatibility for the optional Mega path.
-- [ ] Complete gateway Rust formatting/build/tests and required community CI.
-- [ ] Add user-facing deployment documentation once the validated configuration is established.
+- [x] Add or extend regression/GPU tests and explain both model paths with diagrams.
+- [x] Complete development GPU/model accuracy and end-to-end EPD/PD serving validation; record configurations, revisions and scoring boundaries.
+- [x] Run community-head CPU regression and Python checks.
+- [ ] Complete matched non-CP/conversion comparisons, upstream dependency reproducibility, gateway Rust checks and community CI.
